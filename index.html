@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LiDAR SLAM Lab</title>
+    <meta
+      name="description"
+      content="Browser sandbox for 2D LiDAR simulation, occupancy-grid mapping, scan-matching odometry correction and particle-filter localisation."
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='3' fill='%232563eb'/%3E%3Cpath d='M8 8 L15 4 M8 8 L15 12 M8 8 L1 5' stroke='%232563eb' stroke-width='1'/%3E%3C/svg%3E"
+    />
+    <script type="module" src="src/app.js"></script>
+  </head>
+  <body>
+    <header class="top">
+      <div>
+        <h1>LiDAR SLAM Lab</h1>
+        <p class="lede">
+          Drive a simulated robot with a 2D LiDAR and noisy wheel odometry. Watch the map it builds
+          drift, then correct it with scan matching, and localise it with a particle filter.
+        </p>
+      </div>
+      <nav class="links">
+        <a href="https://github.com/projectbin07-stack/lidar-slam-lab">Source on GitHub</a>
+        <a href="https://github.com/projectbin07-stack/lidar-slam-lab/blob/main/docs/algorithms.md"
+          >How it works</a
+        >
+      </nav>
+    </header>
+
+    <main class="layout">
+      <section class="views" aria-label="Simulation views">
+        <figure class="view">
+          <figcaption>
+            <span>Ground truth</span>
+            <span class="hint" id="truth-hint">Arrow keys or WASD to drive</span>
+          </figcaption>
+          <canvas
+            id="truth"
+            aria-label="Floor plan with the true robot pose and LiDAR beams"
+          ></canvas>
+        </figure>
+        <figure class="view">
+          <figcaption>
+            <span>What the robot believes</span>
+            <span class="hint">Occupancy grid built from its own pose estimate</span>
+          </figcaption>
+          <canvas
+            id="estimate"
+            aria-label="Occupancy grid built by the robot and estimated trajectories"
+          ></canvas>
+        </figure>
+        <ul class="legend" aria-label="Legend">
+          <li><span class="swatch truth"></span>True path</li>
+          <li><span class="swatch odom"></span>Wheel odometry only</li>
+          <li><span class="swatch est"></span>Odometry + scan matching</li>
+          <li><span class="swatch mcl"></span>Particle filter (MCL)</li>
+        </ul>
+      </section>
+
+      <aside class="panel" aria-label="Controls">
+        <section class="group">
+          <h2>Errors against ground truth</h2>
+          <table class="metrics">
+            <thead>
+              <tr>
+                <th></th>
+                <th>now</th>
+                <th>RMS</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th><span class="swatch odom"></span>Odometry</th>
+                <td id="m-odom">-</td>
+                <td id="m-odom-rms">-</td>
+              </tr>
+              <tr>
+                <th><span class="swatch est"></span>Scan matching</th>
+                <td id="m-est">-</td>
+                <td id="m-est-rms">-</td>
+              </tr>
+              <tr>
+                <th><span class="swatch mcl"></span>MCL</th>
+                <td id="m-mcl">-</td>
+                <td id="m-mcl-rms">-</td>
+              </tr>
+            </tbody>
+          </table>
+          <dl class="stats">
+            <div>
+              <dt>Time</dt>
+              <dd id="m-time">0.0 s</dd>
+            </div>
+            <div>
+              <dt>Driven</dt>
+              <dd id="m-dist">0.0 m</dd>
+            </div>
+            <div>
+              <dt>Matched</dt>
+              <dd id="m-accept">-</dd>
+            </div>
+            <div>
+              <dt>Step cost</dt>
+              <dd id="m-cost">-</dd>
+            </div>
+            <div>
+              <dt>Particle spread</dt>
+              <dd id="m-spread">-</dd>
+            </div>
+            <div>
+              <dt>Map precision</dt>
+              <dd id="m-precision">-</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="group">
+          <h2>Run</h2>
+          <div class="row">
+            <button id="play" type="button" class="primary">Pause</button>
+            <button id="reset" type="button">Reset</button>
+            <button id="autopilot" type="button" aria-pressed="false">Demo route</button>
+          </div>
+          <div class="row">
+            <label
+              >Speed
+              <select id="speed">
+                <option value="1">1x</option>
+                <option value="2">2x</option>
+                <option value="4">4x</option>
+              </select>
+            </label>
+            <label
+              >Seed <input id="seed" type="number" min="0" max="4294967295" step="1" value="1"
+            /></label>
+            <button
+              id="kidnap"
+              type="button"
+              title="Move the true robot to a random place without telling the estimators"
+            >
+              Kidnap robot
+            </button>
+          </div>
+          <div class="pad" aria-label="Drive buttons">
+            <button type="button" data-drive="fwd" aria-label="Forward">&#9650;</button>
+            <button type="button" data-drive="left" aria-label="Turn left">&#9664;</button>
+            <button type="button" data-drive="back" aria-label="Reverse">&#9660;</button>
+            <button type="button" data-drive="right" aria-label="Turn right">&#9654;</button>
+          </div>
+        </section>
+
+        <section class="group">
+          <h2>Estimators</h2>
+          <label class="check"
+            ><input id="scanmatch" type="checkbox" checked /> Scan matching corrects odometry</label
+          >
+          <label
+            >MCL particles
+            <select id="particles">
+              <option value="0">Off</option>
+              <option value="300" selected>300 (tracking)</option>
+              <option value="1000">1000</option>
+              <option value="3000">3000 (for global)</option>
+            </select>
+          </label>
+          <label class="check"
+            ><input id="global" type="checkbox" /> Global localisation (unknown start)</label
+          >
+          <label class="check"
+            ><input id="show-particles" type="checkbox" checked /> Show particles</label
+          >
+          <label class="check"
+            ><input id="show-beams" type="checkbox" checked /> Show LiDAR beams</label
+          >
+        </section>
+
+        <section class="group">
+          <h2>Sensor and odometry noise</h2>
+          <label
+            >Odometry error <output id="odom-out">1.0x</output>
+            <input id="odom" type="range" min="0" max="4" step="0.25" value="1" />
+          </label>
+          <label
+            >Range noise <output id="rnoise-out">0.02 m</output>
+            <input id="rnoise" type="range" min="0" max="0.2" step="0.01" value="0.02" />
+          </label>
+          <label
+            >Dropouts <output id="dropout-out">3 %</output>
+            <input id="dropout" type="range" min="0" max="0.5" step="0.01" value="0.03" />
+          </label>
+          <label
+            >Beams <output id="beams-out">180</output>
+            <input id="beams" type="range" min="16" max="360" step="4" value="180" />
+          </label>
+          <label
+            >Max range <output id="range-out">8 m</output>
+            <input id="range" type="range" min="2" max="20" step="0.5" value="8" />
+          </label>
+        </section>
+
+        <section class="group">
+          <h2>Floor plan</h2>
+          <label
+            >Map
+            <select id="map">
+              <option value="office">Office</option>
+              <option value="warehouse">Warehouse aisles</option>
+              <option value="loop">Corridor loop</option>
+              <option value="empty">Empty room (draw your own)</option>
+            </select>
+          </label>
+          <div class="row" role="group" aria-label="Edit mode">
+            <button type="button" data-mode="drive" aria-pressed="true">Drive</button>
+            <button type="button" data-mode="draw" aria-pressed="false">Draw walls</button>
+            <button type="button" data-mode="erase" aria-pressed="false">Erase</button>
+            <button type="button" data-mode="start" aria-pressed="false">Set start</button>
+          </div>
+          <div class="row">
+            <button id="save-map" type="button">Save map JSON</button>
+            <label class="file"
+              >Load map JSON <input id="load-map" type="file" accept=".json,application/json"
+            /></label>
+          </div>
+          <div class="row">
+            <button id="save-pgm" type="button">Download built map (PGM)</button>
+            <button id="save-csv" type="button">Trajectories (CSV)</button>
+          </div>
+          <p class="status" id="status" role="status"></p>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="foot">
+      Everything here is simulated: the robot, the walls, the LiDAR and the odometry errors. Nothing
+      was measured on a real robot. MIT licensed.
+    </footer>
+  </body>
+</html>

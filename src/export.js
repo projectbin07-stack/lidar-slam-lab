@@ -27,7 +27,7 @@ export function cellToGrey(logOdds, freeThresh, occupiedThresh) {
  * @param {OccupancyGrid} grid
  * @param {number} [freeThresh]
  * @param {number} [occupiedThresh]
- * @returns {Uint8Array}
+ * @returns {Uint8Array<ArrayBuffer>}
  */
 export function gridToPgm(grid, freeThresh = 0.196, occupiedThresh = 0.65) {
   const header = new TextEncoder().encode(`P5\n${grid.width} ${grid.height}\n255\n`);
