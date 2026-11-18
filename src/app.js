@@ -481,7 +481,7 @@ function drawMetrics() {
   const sim = state.sim;
   const s = summarize(sim);
   // Map precision costs a distance transform; refresh it every 2 s of sim time.
-  if (sim.steps !== state.precisionAt && sim.steps % 20 === 0) {
+  if (state.precisionAt < 0 || sim.steps - state.precisionAt >= 20) {
     state.precision = mapPrecision(sim.grid, state.world.walls, 0.1).precision;
     state.precisionAt = sim.steps;
   }
@@ -491,8 +491,10 @@ function drawMetrics() {
   };
   set("m-odom", fmt(s.odomError, "m"));
   set("m-odom-rms", fmt(s.odomRms, "m"));
-  set("m-est", sim.settings.scanMatching || sim.matchAttempts > 0 ? fmt(s.estError, "m") : "off");
-  set("m-est-rms", fmt(s.estRms, "m"));
+  // With matching never used, the estimate is just dead reckoning again.
+  const matchingUsed = sim.settings.scanMatching || sim.matchAttempts > 0;
+  set("m-est", matchingUsed ? fmt(s.estError, "m") : "off");
+  set("m-est-rms", matchingUsed ? fmt(s.estRms, "m") : "off");
   set("m-mcl", sim.pf === null ? "off" : fmt(s.mclError, "m"));
   set("m-mcl-rms", fmt(s.mclRms, "m"));
   set("m-time", fmt(s.time, "s", 1));
