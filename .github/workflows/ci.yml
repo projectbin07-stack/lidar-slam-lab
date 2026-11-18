@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ["22", "24"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dev tools
+        run: npm ci
+
+      - name: Format
+        run: npm run format:check
+
+      - name: Type check (JSDoc, strict)
+        run: npm run typecheck
+
+      - name: Test with coverage thresholds
+        run: npm run coverage
+
+      - name: CLI smoke test
+        run: |
+          node bin/lidar-slam-lab.js --version
+          node bin/lidar-slam-lab.js maps
+          node bin/lidar-slam-lab.js run --map loop --steps 200 --out out
+          node bin/lidar-slam-lab.js benchmark --maps loop --seeds 1 --steps 100
+          node bin/lidar-slam-lab.js export-map office > office.json
+          node bin/lidar-slam-lab.js run --map office.json --steps 50 --json
+
+  browser:
+    name: Browser smoke test (headless Chrome)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Load the page and check the simulation ran
+        run: |
+          node scripts/serve.js &
+          sleep 1
+          # run=50 drives 50 steps of 0.1 s before the first frame, so the
+          # time readout must show 5.0 s if every module loaded and ran.
+          google-chrome --headless=new --disable-gpu --no-sandbox \
+            --virtual-time-budget=5000 --dump-dom \
+            "http://127.0.0.1:8000/?map=office&run=50&paused=1" > dom.html
+          grep -o 'id="m-time">[^<]*' dom.html
+          grep -q 'id="m-time">5.0 s' dom.html
+          grep -q 'id="m-accept">100 %' dom.html
