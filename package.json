@@ -1,10 +1,28 @@
 {
   "name": "lidar-slam-lab",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Browser sandbox for 2D LiDAR simulation, log-odds occupancy mapping and scan-matching odometry correction.",
   "license": "MIT",
   "type": "module",
+  "exports": {
+    "./geometry": "./src/geometry.js",
+    "./rng": "./src/rng.js",
+    "./world": "./src/world.js",
+    "./maps": "./src/maps.js",
+    "./lidar": "./src/lidar.js",
+    "./motion": "./src/motion.js",
+    "./grid": "./src/grid.js",
+    "./distance": "./src/distance.js",
+    "./scanmatch": "./src/scanmatch.js",
+    "./mcl": "./src/mcl.js",
+    "./metrics": "./src/metrics.js",
+    "./autopilot": "./src/autopilot.js",
+    "./export": "./src/export.js",
+    "./sim": "./src/sim.js",
+    "./scanlog": "./src/scanlog.js",
+    "./package.json": "./package.json"
+  },
   "engines": {
     "node": ">=22"
   },
