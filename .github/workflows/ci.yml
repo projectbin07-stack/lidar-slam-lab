@@ -50,6 +50,9 @@ jobs:
           node bin/lidar-slam-lab.js benchmark --maps loop --seeds 1 --steps 100
           node bin/lidar-slam-lab.js export-map office > office.json
           node bin/lidar-slam-lab.js run --map office.json --steps 50 --json
+          node bin/lidar-slam-lab.js run --map loop --steps 200 --scan-log scans.jsonl
+          node bin/lidar-slam-lab.js localize scans.jsonl --map loop --motion omni --out loc
+          node bin/lidar-slam-lab.js localize scans.jsonl --mount 0.1,0,0 --json
 
   browser:
     name: Browser smoke test (headless Chrome)

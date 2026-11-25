@@ -15,12 +15,13 @@ import {
 } from "./sim.js";
 import { gridToPgm, mapYaml, trajectoriesCsv } from "./export.js";
 import { mapPrecision } from "./metrics.js";
+import { parseScanLog, runScanLog, scanLogCsv, scanLogLine } from "./scanlog.js";
 
 /** @typedef {import("./world.js").World} World */
 /** @typedef {import("./sim.js").SimSettings} SimSettings */
 /** @typedef {import("./sim.js").SimSummary} SimSummary */
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.2.0";
 
 /**
  * Everything the CLI touches outside itself, so tests can run it in memory.
@@ -38,6 +39,7 @@ Usage:
   lidar-slam-lab maps
   lidar-slam-lab export-map <map-id>
   lidar-slam-lab run [options]
+  lidar-slam-lab localize <scans.jsonl> [options]
   lidar-slam-lab benchmark [--maps office,warehouse,loop] [--seeds 5] [--steps N]
   lidar-slam-lab --help | --version
 
@@ -56,6 +58,28 @@ Options for run:
   --range-noise <m>       LiDAR range noise std in metres (default: 0.02)
   --dropout <p>           probability a beam returns nothing (default: 0.03)
   --beams <n>             beams per scan (default: 180)
+  --out <dir>             write map.pgm, map.yaml and trajectory.csv there
+  --scan-log <file>       also write every scan with the odometry and true
+                          pose as a scan log (the input format of localize)
+  --json                  print the summary as JSON
+
+localize runs the same estimators on recorded scans: a JSON Lines file with
+one sensor_msgs/LaserScan-like object per line plus the odometry pose at that
+scan (format in docs/algorithms.md). Without --map it builds a map with
+odometry + scan matching; with --map it also runs MCL on that floor plan.
+
+Options for localize:
+  --mount <x,y,yaw>       LiDAR pose in the robot frame (m, m, rad; default 0,0,0)
+  --start <x,y,theta>     robot pose at the first scan in the map frame
+                          (default: the map's start with --map, else the first
+                          odometry pose)
+  --map <id|file.json>    known floor plan for MCL
+  --particles <n>         MCL particle count, 0 disables (default: 300)
+  --global                start MCL with no idea where the robot is
+  --motion <model>        MCL motion model: odometry (rot1-trans-rot2) or omni
+                          (forward, sideways, turn; for mecanum bases)
+  --no-scan-matching      dead reckoning only for the mapping estimate
+  --seed <n>              MCL random seed (default: 1)
   --out <dir>             write map.pgm, map.yaml and trajectory.csv there
   --json                  print the summary as JSON
 `;
@@ -104,17 +128,23 @@ function loadWorld(spec, io) {
  * @param {World} world
  * @param {SimSettings} settings
  * @param {number} maxSteps
+ * @param {(sim: import("./sim.js").Simulation) => void} [onScan] called after the
+ *   first scan and after every step
  */
-export function runRoute(world, settings, maxSteps) {
+export function runRoute(world, settings, maxSteps, onScan) {
   const sim = createSimulation(world, settings);
   initialScan(sim);
+  onScan?.(sim);
   let idx = 0;
   let finished = world.route.length === 0;
   for (let k = 0; k < maxSteps && !finished; k++) {
     const cmd = followRoute(sim.truePose, world.route, idx);
     idx = cmd.index;
     finished = cmd.done;
-    if (!finished) step(sim, cmd.v, cmd.w);
+    if (!finished) {
+      step(sim, cmd.v, cmd.w);
+      onScan?.(sim);
+    }
   }
   return { sim, finished };
 }
@@ -175,6 +205,7 @@ function dispatch(argv, io) {
   }
   if (command === "run") return runCommand(rest, io);
   if (command === "benchmark") return benchmarkCommand(rest, io);
+  if (command === "localize") return localizeCommand(rest, io);
   throw new UsageError(`unknown command "${command}" (try --help)`);
 }
 
@@ -199,6 +230,7 @@ function runCommand(args, io) {
       dropout: { type: "string", default: "0.03" },
       beams: { type: "string", default: "180" },
       out: { type: "string" },
+      "scan-log": { type: "string" },
       json: { type: "boolean", default: false },
     },
   });
@@ -219,7 +251,27 @@ function runCommand(args, io) {
   settings.lidar.beams = numberOption(values.beams, "beams", 8, 2000, true);
   const maxSteps = numberOption(values.steps, "steps", 1, MAX_TRAJECTORY_POINTS / 2, true);
 
-  const { sim, finished } = runRoute(world, settings, maxSteps);
+  /** @type {string[]} */
+  const logLines = [];
+  const onScan =
+    values["scan-log"] === undefined
+      ? undefined
+      : (/** @type {import("./sim.js").Simulation} */ sim) => {
+          logLines.push(
+            scanLogLine(
+              sim.time,
+              sim.odomPose,
+              /** @type {import("./lidar.js").Scan} */ (sim.lastScan),
+              {
+                truth: sim.truePose,
+                full: logLines.length === 0,
+              },
+            ),
+          );
+        };
+  const { sim, finished } = runRoute(world, settings, maxSteps, onScan);
+  if (values["scan-log"] !== undefined)
+    io.writeFile(values["scan-log"], logLines.join("\n") + "\n");
   const s = summarize(sim);
   const map = mapPrecision(sim.grid, world.walls, 0.1);
 
@@ -265,6 +317,109 @@ function runCommand(args, io) {
       "",
     ].join("\n"),
   );
+  if (values.out !== undefined)
+    io.out(`wrote map.pgm, map.yaml, trajectory.csv to ${values.out}\n`);
+  if (values["scan-log"] !== undefined)
+    io.out(`wrote ${logLines.length} scans to ${values["scan-log"]}\n`);
+  return 0;
+}
+
+/**
+ * @param {string | undefined} value
+ * @param {string} name
+ * @returns {import("./geometry.js").Pose | undefined}
+ */
+function poseOption(value, name) {
+  if (value === undefined) return undefined;
+  const v = value.split(",").map((x) => Number(x.trim()));
+  if (v.length !== 3 || !v.every(Number.isFinite))
+    throw new UsageError(`--${name} must be three numbers x,y,theta`);
+  return { x: v[0], y: v[1], theta: v[2] };
+}
+
+/**
+ * @param {string[]} args
+ * @param {CliIo} io
+ * @returns {number}
+ */
+function localizeCommand(args, io) {
+  const { values, positionals } = parseArgs({
+    args,
+    strict: true,
+    allowPositionals: true,
+    options: {
+      mount: { type: "string" },
+      start: { type: "string" },
+      map: { type: "string" },
+      particles: { type: "string", default: "300" },
+      global: { type: "boolean", default: false },
+      motion: { type: "string", default: "odometry" },
+      "no-scan-matching": { type: "boolean", default: false },
+      seed: { type: "string", default: "1" },
+      out: { type: "string" },
+      json: { type: "boolean", default: false },
+    },
+  });
+  if (positionals.length !== 1) throw new UsageError("localize needs one scan log file");
+  const file = positionals[0];
+  if (values.motion !== "odometry" && values.motion !== "omni")
+    throw new UsageError("--motion must be odometry or omni");
+  const mount = poseOption(values.mount, "mount");
+  const map = values.map === undefined ? undefined : loadWorld(values.map, io);
+  let log;
+  try {
+    log = parseScanLog(io.readText(file), mount);
+  } catch (e) {
+    if (e instanceof TypeError && "code" in e) throw e;
+    throw new UsageError(`${file}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  const r = runScanLog(log, {
+    start: poseOption(values.start, "start") ?? map?.start,
+    map,
+    particles: numberOption(values.particles, "particles", 0, 20000, true),
+    global: values.global,
+    motionModel: values.motion,
+    scanMatching: !values["no-scan-matching"],
+    seed: numberOption(values.seed, "seed", 0, 2 ** 32 - 1, true),
+  });
+  if (values.out !== undefined) {
+    const dir = values.out.replace(/[\\/]+$/, "");
+    io.mkdir(dir);
+    io.writeFile(`${dir}/map.pgm`, gridToPgm(r.grid));
+    io.writeFile(`${dir}/map.yaml`, mapYaml(r.grid, "map.pgm"));
+    io.writeFile(`${dir}/trajectory.csv`, scanLogCsv(r));
+  }
+  const last = r.odometry.length - 1;
+  const summary = {
+    scans: log.length,
+    duration: log[last].t - log[0].t,
+    distance: r.distance,
+    acceptRate: r.matchAttempts === 0 ? NaN : r.matchAccepted / r.matchAttempts,
+    final: { odometry: r.odometry[last], estimate: r.estimate[last], mcl: r.mcl?.[last] ?? null },
+    rms: r.rms,
+  };
+  if (values.json) {
+    io.out(
+      JSON.stringify(summary, (_k, v) => (typeof v === "number" && Number.isNaN(v) ? null : v), 2) +
+        "\n",
+    );
+    return 0;
+  }
+  const pose = (/** @type {import("./geometry.js").Pose | null} */ p) =>
+    p === null ? "-" : `${fmt(p.x)}, ${fmt(p.y)}, ${fmt(p.theta)}`;
+  const lines = [
+    `scans            ${log.length} over ${fmt(summary.duration, 1)} s, ${fmt(r.distance, 1)} m by odometry`,
+    `scan matches     ${Number.isNaN(summary.acceptRate) ? "-" : `${fmt(100 * summary.acceptRate, 1)} % accepted`}`,
+    `final pose       x, y, theta`,
+    `  odometry       ${pose(summary.final.odometry)}`,
+    `  scan matching  ${pose(summary.final.estimate)}`,
+    `  MCL            ${pose(summary.final.mcl)}`,
+  ];
+  if (r.rms)
+    lines.push(
+      `RMS error against the log's truth poses: odometry ${fmt(r.rms.odometry)} m, scan matching ${fmt(r.rms.estimate)} m, MCL ${Number.isNaN(r.rms.mcl) ? "-" : `${fmt(r.rms.mcl)} m`}`,
+    );
+  io.out(lines.join("\n") + "\n");
   if (values.out !== undefined)
     io.out(`wrote map.pgm, map.yaml, trajectory.csv to ${values.out}\n`);
   return 0;
