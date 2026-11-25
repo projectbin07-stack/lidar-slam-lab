@@ -273,8 +273,8 @@ export function runScanLog(log, options = {}) {
     if (pf) {
       predict(pf, measured);
       updateWeights(pf, scan);
+      /** @type {Pose[]} */ (res.mcl).push(estimate(pf).pose); // before resampling, as in sim.js
       resampleIfNeeded(pf);
-      /** @type {Pose[]} */ (res.mcl).push(estimate(pf).pose);
     }
     if (scanMatching) {
       const field = likelihoodField(occupiedMask(grid, threshold), grid, fieldSigma);

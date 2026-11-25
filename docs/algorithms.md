@@ -174,7 +174,10 @@ chapter 8:
   by a few per cent during normal tracking, which without it kept injecting
   stray particles.
 - **Estimate.** Weighted mean position, circular mean heading. The reported
-  spread is the weighted RMS distance of the particles from the mean.
+  spread is the weighted RMS distance of the particles from the mean. It is
+  taken after the measurement update and before resampling (since 0.2.1):
+  after resampling the weights are uniform, and particles just injected by
+  recovery would pull the mean.
 
 Default: 300 particles started around the known start pose (tracking). With
 "global localisation" they start uniformly over free space; use 2000 or more.

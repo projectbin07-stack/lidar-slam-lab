@@ -207,3 +207,32 @@ test("with MCL disabled the summary reports NaN", () => {
   assert.ok(Number.isNaN(s.mclError));
   assert.ok(Number.isNaN(s.mclRms));
 });
+
+test("the reported MCL pose is taken before resampling, so injected random particles do not pull it", () => {
+  const world = BUILTIN_MAPS.office();
+  const sim = createSimulation(world, { ...defaultSettings(), seed: 4 });
+  initialScan(sim);
+  let idx = 0;
+  for (let k = 0; k < 30; k++) {
+    const cmd = followRoute(sim.truePose, world.route, idx);
+    idx = cmd.index;
+    step(sim, cmd.v, cmd.w);
+  }
+  const pf = /** @type {import("../src/mcl.js").ParticleFilter} */ (sim.pf);
+  // Make the long-term fit look far better than the recent one: recovery injects
+  // the maximum fraction (10 %) of random particles at the next resampling.
+  pf.wSlow = 1000;
+  const injected = pf.injected;
+  const cmd = followRoute(sim.truePose, world.route, idx);
+  step(sim, cmd.v, cmd.w);
+  assert.ok(pf.injected - injected > 10, `injected ${pf.injected - injected}`);
+  const reported = Math.hypot(
+    /** @type {any} */ (sim.mclPose).x - sim.truePose.x,
+    /** @type {any} */ (sim.mclPose).y - sim.truePose.y,
+  );
+  // The resampled set (uniform weights, random particles included) is pulled away.
+  const after = estimate(pf).pose;
+  const pulled = Math.hypot(after.x - sim.truePose.x, after.y - sim.truePose.y);
+  assert.ok(reported < 0.1, `reported ${reported}`);
+  assert.ok(pulled > 3 * reported, `after resampling ${pulled}, reported ${reported}`);
+});
