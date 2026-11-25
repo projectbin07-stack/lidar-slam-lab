@@ -104,12 +104,13 @@ MCL poses at every step. Full usage:
 
 ```
 $ node bin/lidar-slam-lab.js --help
-lidar-slam-lab 0.1.0: 2D LiDAR SLAM and localisation simulator
+lidar-slam-lab 0.2.0: 2D LiDAR SLAM and localisation simulator
 
 Usage:
   lidar-slam-lab maps
   lidar-slam-lab export-map <map-id>
   lidar-slam-lab run [options]
+  lidar-slam-lab localize <scans.jsonl> [options]
   lidar-slam-lab benchmark [--maps office,warehouse,loop] [--seeds 5] [--steps N]
   lidar-slam-lab --help | --version
 
@@ -129,8 +130,66 @@ Options for run:
   --dropout <p>           probability a beam returns nothing (default: 0.03)
   --beams <n>             beams per scan (default: 180)
   --out <dir>             write map.pgm, map.yaml and trajectory.csv there
+  --scan-log <file>       also write every scan with the odometry and true
+                          pose as a scan log (the input format of localize)
+  --json                  print the summary as JSON
+
+localize runs the same estimators on recorded scans: a JSON Lines file with
+one sensor_msgs/LaserScan-like object per line plus the odometry pose at that
+scan (format in docs/algorithms.md). Without --map it builds a map with
+odometry + scan matching; with --map it also runs MCL on that floor plan.
+
+Options for localize:
+  --mount <x,y,yaw>       LiDAR pose in the robot frame (m, m, rad; default 0,0,0)
+  --start <x,y,theta>     robot pose at the first scan in the map frame
+                          (default: the map's start with --map, else the first
+                          odometry pose)
+  --map <id|file.json>    known floor plan for MCL
+  --particles <n>         MCL particle count, 0 disables (default: 300)
+  --global                start MCL with no idea where the robot is
+  --motion <model>        MCL motion model: odometry (rot1-trans-rot2) or omni
+                          (forward, sideways, turn; for mecanum bases)
+  --no-scan-matching      dead reckoning only for the mapping estimate
+  --seed <n>              MCL random seed (default: 1)
+  --out <dir>             write map.pgm, map.yaml and trajectory.csv there
   --json                  print the summary as JSON
 ```
+
+### Recorded scans
+
+`localize` runs the estimators on a scan log instead of the simulator, for
+example one written by `run --scan-log`, or converted from a ROS 2 bag's
+`/scan` and `/odom` (rosbag-inspect `export --arrays` keeps the ranges):
+
+```
+$ node bin/lidar-slam-lab.js run --map office --scan-log office.jsonl
+...
+wrote 1032 scans to office.jsonl
+$ node bin/lidar-slam-lab.js localize office.jsonl --map office
+scans            1032 over 103.1 s, 66.2 m by odometry
+scan matches     100.0 % accepted
+final pose       x, y, theta
+  odometry       4.949, 0.303, -1.826
+  scan matching  2.209, 6.979, 3.136
+  MCL            2.276, 7.024, 3.139
+RMS error against the log's truth poses: odometry 3.962 m, scan matching 0.038 m, MCL 0.037 m
+```
+
+The numbers agree with the `run` above (dead reckoning 3.964 m, scan
+matching 0.038 m, MCL 0.036 m RMS) to within a few millimetres: the log
+rounds ranges to 0.1 mm. The format is in
+[docs/algorithms.md](docs/algorithms.md#recorded-scans-scanlogjs-lidar-slam-lab-localize).
+
+### Library
+
+Since 0.2.0 `package.json` has an `exports` map naming the public modules
+(`lidar-slam-lab/lidar`, `/motion`, `/grid`, `/distance`, `/scanmatch`,
+`/mcl`, `/scanlog`, `/sim`, ...); all of them are DOM-free ES modules. New in
+0.2.0: a LiDAR mount pose (`simulateScan(..., mount)`, `scan.origin`, used by
+the grid, scan matching and MCL), `minRange` and `angleMin` in the LiDAR
+settings, MCL's `motionModel: "omni"` for holonomic bases, and the scan log
+reader. With the default settings every result is the same as in 0.1.0 (the
+benchmark below is unchanged).
 
 ## Benchmark
 
@@ -187,7 +246,8 @@ src/
   grid.js       log-odds occupancy grid, Bresenham ray tracing
   distance.js   Euclidean distance transform, likelihood field
   scanmatch.js  correlative scan-to-map matching
-  mcl.js        particle filter
+  mcl.js        particle filter (rot1-trans-rot2 or omnidirectional motion model)
+  scanlog.js    recorded scans (JSON Lines) through the same estimators
   autopilot.js  waypoint follower
   world.js      map format, validation, collisions
   maps.js       built-in floor plans
@@ -238,8 +298,10 @@ simulation runs.
   kidnapped robot) break it.
 - MCL uses the true floor plan, not the map being built. Global localisation
   can settle on the mirror-image pose in the nearly symmetric corridor loop.
-- The LiDAR model has no beam width, reflectivity, minimum range or motion
-  distortion. Walls are infinitely thin line segments.
+- The LiDAR model has no beam width, reflectivity or motion distortion.
+  Walls are infinitely thin line segments.
+- Recorded scans (`localize`) have only been tested with logs written by the
+  simulator; no real LiDAR recording has been run through it yet.
 - The autopilot steers with the true pose, so that runs with different
   estimators drive the same path.
 - Step cost is about 15 ms on the development machine with scan matching and
@@ -252,7 +314,7 @@ simulation runs.
 - ICP (point-to-line) as a second scan matcher to compare against.
 - Scan-to-scan matching for odometry when no map exists yet.
 - A mode where MCL localises in the map the robot built itself.
-- Import of real recorded 2D scans (for example from a public dataset).
+- Run a real recorded 2D dataset through `localize` and report the result.
 
 ## License
 

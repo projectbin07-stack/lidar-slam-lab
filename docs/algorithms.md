@@ -72,8 +72,18 @@ by 2D cross products); the nearest hit within the maximum range wins. Defaults:
 deviation, 3 % of beams dropped at random. A dropped beam and a beam that hits
 nothing are both reported as "no return" (NaN).
 
-Not modelled: beam divergence, mixed pixels at edges, reflectivity, motion
-distortion within a scan, and the minimum range of real sensors.
+Since 0.2.0 a scan may carry an `origin`: the LiDAR's mount pose (offset and
+yaw) in the robot frame. `simulateScan(walls, pose, config, rng, mount)` casts
+from the mounted sensor and records the mount; the grid, scan matching, MCL
+and `scanEndpoints` all place the beams at robot pose (+) origin, so the
+estimators keep tracking the robot frame while the rays start where the
+sensor is. Without an origin every result is the same as in 0.1.0. A
+`minRange` in the LiDAR settings reports closer returns as no return (real 2D
+LiDARs see nothing within roughly 0.1 m), and `angleMin` gives an asymmetric
+fan, as a LaserScan's `angle_min` does.
+
+Not modelled: beam divergence, mixed pixels at edges, reflectivity and motion
+distortion within a scan.
 
 ## Occupancy grid (`grid.js`)
 
@@ -132,6 +142,22 @@ chapter 8:
   noise sample, using the model above with larger terms (0.1 rad/rad,
   0.05 rad/m, 0.06 m/m, 0.01 m/rad) and no bias. The filter does not know the
   robot's systematic drift; it has to observe it.
+- **Motion models** (`motionModel`, since 0.2.0). `"odometry"` (the default)
+  samples rot1-trans-rot2 as above, which suits a robot that drives forward
+  and turns. For backward or sideways motion it is a poor model: driving
+  backward is rot1 = pi, rot2 = -pi and a mecanum strafe is two 90 degree
+  turns, so the rotation-dependent terms produce noise far larger than a
+  small step and clipping the noisy distance at zero shortens it. Predicting
+  1 m of backward driving in 2 cm steps with 2000 particles and no
+  measurements leaves the cloud's mean at x = -0.37 m instead of -1 m, with a
+  1.0 m spread and a 1.8 rad heading spread (test `sensor-pose.test.js`).
+  `"omni"` samples the motion in the body frame instead: forward
+  `dx` with sd transFromTrans |dx| + transFromRot |dtheta|, sideways `dy`
+  likewise, and the turn with sd rotFromRot |dtheta| + rotFromTrans |(dx, dy)|.
+  Forward driving gets the same distance noise as before; backward and
+  sideways steps get noise proportional to the step (the same prediction ends
+  at -1.00 m with a 0.01 m spread). Use it for holonomic bases and for
+  frames that move sideways when the robot turns.
 - **Weighting.** The true walls are rasterised into the grid and turned into
   a likelihood field with sigma = 0.2 m (wider than for scan matching, so that
   particles a little off still get a gradient). For 36 evenly spaced beams,
@@ -188,3 +214,42 @@ All noise comes from seeded mulberry32 generators, with separate streams for
 the LiDAR, the odometry and the particle filter. The same seed and settings
 give identical runs in the browser and the CLI, and changing a LiDAR setting
 does not change the odometry noise sequence.
+
+## Recorded scans (`scanlog.js`, `lidar-slam-lab localize`)
+
+Since 0.2.0 the estimators also run on recorded data: a scan log, one JSON
+object per line, with the fields of a `sensor_msgs/LaserScan` and the
+odometry pose of the robot at that scan:
+
+```json
+{
+  "t": 0.2,
+  "odom": [0.1, 0.0, 0.01],
+  "angle_min": -3.14159,
+  "angle_increment": 0.01745,
+  "range_min": 0.12,
+  "range_max": 3.5,
+  "ranges": [1.02, null, 0.98, "Infinity"]
+}
+```
+
+- `t` (s, not decreasing), `odom` ([x, y, theta] in the odometry frame) and
+  `ranges` are required on every line; `angle_min`, `angle_increment`,
+  `range_min` and `range_max` on the first line and whenever they change
+  (later lines inherit them).
+- A range that is `null`, not a finite number (including the strings
+  `"Infinity"`, `"-Infinity"` and `"NaN"` that some exporters write) or
+  outside `[range_min, range_max]` is "no return", as REP 117 specifies.
+- An optional `truth` ([x, y, theta] in the map frame) on every line makes
+  `localize` report RMS errors; `run --scan-log` writes it.
+- Lines that are blank or start with `#` are skipped; at most 200000 scans
+  and 10000 beams per scan.
+
+`localize` takes the odometry motion between consecutive scans as the
+measured delta and runs exactly the per-step sequence of the simulation:
+dead reckoning, odometry + scan matching against the grid built from that
+estimate, and, with `--map`, MCL on the given floor plan. `--mount x,y,yaw`
+sets the LiDAR's pose in the robot frame (the scans' origin), `--start` the
+robot's pose at the first scan in the map frame. Re-running a simulated log
+reproduces the simulation's errors to within a few millimetres (the log
+rounds ranges to 0.1 mm); a test checks this.
