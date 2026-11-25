@@ -1,6 +1,6 @@
 {
   "name": "lidar-slam-lab",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Browser sandbox for 2D LiDAR simulation, log-odds occupancy mapping and scan-matching odometry correction.",
   "license": "MIT",

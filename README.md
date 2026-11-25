@@ -104,7 +104,7 @@ MCL poses at every step. Full usage:
 
 ```
 $ node bin/lidar-slam-lab.js --help
-lidar-slam-lab 0.2.0: 2D LiDAR SLAM and localisation simulator
+lidar-slam-lab 0.2.1: 2D LiDAR SLAM and localisation simulator
 
 Usage:
   lidar-slam-lab maps

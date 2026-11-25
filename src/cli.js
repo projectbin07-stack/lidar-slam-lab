@@ -21,7 +21,7 @@ import { parseScanLog, runScanLog, scanLogCsv, scanLogLine } from "./scanlog.js"
 /** @typedef {import("./sim.js").SimSettings} SimSettings */
 /** @typedef {import("./sim.js").SimSummary} SimSummary */
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.2.1";
 
 /**
  * Everything the CLI touches outside itself, so tests can run it in memory.

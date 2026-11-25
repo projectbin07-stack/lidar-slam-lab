@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-11-25
+
+### Fixed
+
+- The reported MCL pose (and spread) was computed after resampling. When
+  recovery replaced particles with random ones, those counted with uniform
+  weight in the mean and pulled it away from the robot until the next
+  measurement update. The estimate is now taken from the weighted particles
+  before resampling, in `sim.js` and in `localize`. Found by Robot Studio: on
+  its simulated mecanum base driving a square in its lab world, the MCL error
+  stayed at about 0.23 m RMS for every seed (0.024 to 0.033 m after the fix,
+  seeds 1 to 8). The benchmark here is unchanged to three decimals (recovery
+  does not trigger on its demo routes); a test forces an injection and checks
+  the reported pose.
+
 ## [0.2.0] - 2026-11-25
 
 Requested by Robot Studio, which vendors these modules (ecosystem audit
@@ -57,5 +72,6 @@ First release.
   and Windows with Node 22 and 24, a headless Chrome smoke test, and
   deployment to GitHub Pages.
 
+[0.2.1]: https://github.com/projectbin07-stack/lidar-slam-lab/releases/tag/v0.2.1
 [0.2.0]: https://github.com/projectbin07-stack/lidar-slam-lab/releases/tag/v0.2.0
 [0.1.0]: https://github.com/projectbin07-stack/lidar-slam-lab/releases/tag/v0.1.0
